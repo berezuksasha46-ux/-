@@ -36,14 +36,13 @@ function createDeck(cardCount = 36) {
 io.on('connection', (socket) => {
     let currentUser = null;
 
-    // Авторизация / Инициализация
+    // Инициализация пользователя со стартовым балансом 0
     socket.on('INIT_USER', async (userData) => {
         currentUser = userData;
         socket.join(`user_${userData.id}`);
 
         if (supabase) {
             let { data: user } = await supabase.from('users').select('*').eq('telegram_id', userData.id).single();
-            const now = new Date();
 
             if (!user) {
                 const referrerId = userData.start_param ? parseInt(userData.start_param) : null;
@@ -54,8 +53,11 @@ io.on('connection', (socket) => {
                     first_name: userData.first_name || 'Игрок',
                     photo_url: userData.photo_url || '',
                     stars_balance: 0,
-                    bonus_balance: 10, // Бонус 10 звезд при первом зачислении
-                    last_daily_claim: now.toISOString(),
+                    bonus_balance: 0,
+                    wins: 0,
+                    losses: 0,
+                    level: 1,
+                    last_daily_claim: null,
                     referrer_id: referrerId,
                     is_admin: ADMIN_IDS.includes(userData.id)
                 };
@@ -63,7 +65,6 @@ io.on('connection', (socket) => {
                 const { data: createdUser } = await supabase.from('users').insert(newUser).select().single();
                 user = createdUser || newUser;
 
-                // Если есть реферер - даем ему +10 звезд
                 if (referrerId && referrerId !== userData.id) {
                     await supabase.rpc('increment_balance', { user_id: referrerId, amount: 10 }).catch(() => {});
                 }
@@ -71,12 +72,11 @@ io.on('connection', (socket) => {
 
             socket.emit('USER_DATA', user);
         } else {
-            // Заглушка если Supabase временно не подключен
             socket.emit('USER_DATA', {
                 telegram_id: userData.id,
                 first_name: userData.first_name || 'Игрок',
-                stars_balance: 50,
-                bonus_balance: 10,
+                stars_balance: 0,
+                bonus_balance: 0,
                 level: 1,
                 wins: 0,
                 losses: 0
@@ -84,24 +84,22 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Запрос лидерборда (Топ-50 игроков по победам)
+    // Настоящий лидерборд из базы (только реальные игроки с победами)
     socket.on('GET_LEADERBOARD', async () => {
         if (supabase) {
             const { data: leaders } = await supabase
                 .from('users')
                 .select('username, first_name, wins, level')
+                .gt('wins', 0)
                 .order('wins', { ascending: false })
                 .limit(50);
             socket.emit('LEADERBOARD_DATA', leaders || []);
         } else {
-            socket.emit('LEADERBOARD_DATA', [
-                { first_name: "Александр", wins: 15, level: 2 },
-                { first_name: "Ricky", wins: 8, level: 1 }
-            ]);
+            socket.emit('LEADERBOARD_DATA', []);
         }
     });
 
-    // Получение списка открытых комнат
+    // Список открытых комнат
     socket.on('GET_ROOMS', () => {
         const publicRooms = Object.values(rooms)
             .filter(r => r.state === 'WAITING')
@@ -116,8 +114,15 @@ io.on('connection', (socket) => {
         socket.emit('ROOMS_LIST', publicRooms);
     });
 
-    // Создание стола
+    // Создание стола (Строго 1 активный стол на игрока)
     socket.on('CREATE_ROOM', ({ mode, deckSize, bet, user }) => {
+        // Проверка: есть ли у этого игрока уже созданный стол в ожидании
+        const existingRoom = Object.values(rooms).find(r => r.state === 'WAITING' && r.players[0].id === user.id);
+        if (existingRoom) {
+            socket.emit('ERROR_MSG', 'У вас уже есть открытый стол! Дождитесь соперника или удалите его.');
+            return;
+        }
+
         const roomId = `room_${Date.now()}`;
         rooms[roomId] = {
             id: roomId,
@@ -144,10 +149,13 @@ io.on('connection', (socket) => {
             room.players.push({ id: user.id, name: user.first_name, level: user.level || 1, socketId: socket.id, hand: [] });
             socket.join(roomId);
             startGame(room);
+            io.emit('ROOMS_UPDATED');
+        } else {
+            socket.emit('ERROR_MSG', 'Этот стол уже занят или закрыт.');
         }
     });
 
-    // Ежедневный бонус с точным таймером
+    // Ежедневный бонус (строго 1 раз в 24 часа по кнопке)
     socket.on('CLAIM_DAILY_BONUS', async (userId) => {
         if (!supabase) {
             socket.emit('BONUS_CLAIMED', { success: false, message: 'База данных не подключена' });
@@ -162,13 +170,13 @@ io.on('connection', (socket) => {
         const cooldown = 24 * 60 * 60 * 1000; // 24 часа
 
         if (!lastClaim || (now - lastClaim) >= cooldown) {
-            const newBonus = (user.bonus_balance || 0) + 10;
+            const newBalance = (user.stars_balance || 0) + 10;
             await supabase.from('users').update({
-                bonus_balance: newBonus,
+                stars_balance: newBalance,
                 last_daily_claim: now.toISOString()
             }).eq('telegram_id', userId);
             
-            socket.emit('BONUS_CLAIMED', { success: true, amount: 10, newBonusBalance: newBonus });
+            socket.emit('BONUS_CLAIMED', { success: true, amount: 10, newBalance });
         } else {
             const nextClaimTime = new Date(lastClaim.getTime() + cooldown);
             const diffMs = nextClaimTime - now;
@@ -177,7 +185,7 @@ io.on('connection', (socket) => {
 
             socket.emit('BONUS_CLAIMED', { 
                 success: false, 
-                message: `Бонус уже забран! До следующего бонуса: ${hours} ч. ${minutes} мин.` 
+                message: `Бонус уже получен! Следующий бонус через ${hours}ч. ${minutes}мин.` 
             });
         }
     });
@@ -234,4 +242,4 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`CardFool Server running on port ${PORT}`);
 });
-        
+              
