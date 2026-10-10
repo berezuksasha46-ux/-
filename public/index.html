@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Дурак на Звёзды</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; background: #0f172a; color: #fff; text-align: center; padding: 20px; margin: 0; }
+        h1 { font-size: 24px; margin-bottom: 10px; }
+        .card { background: #1e293b; padding: 15px; border-radius: 12px; margin-top: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        button { background: #38bdf8; color: #0f172a; border: none; padding: 12px 20px; font-size: 16px; font-weight: bold; border-radius: 8px; cursor: pointer; width: 100%; margin-top: 10px; }
+        button:active { background: #0ea5e9; }
+        input { width: 100%; padding: 10px; font-size: 16px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #fff; box-sizing: border-box; margin-top: 5px; }
+        #status { margin-top: 15px; font-size: 14px; color: #94a3b8; }
+    </style>
+</head>
+<body>
+    <h1>🃏 Дурак на Звёзды</h1>
+    <div class="card">
+        <p>Ставка (в Звёздах):</p>
+        <input type="number" id="betInput" value="10" min="1">
+        <button onclick="joinGame()">Найти игру</button>
+        <div id="status">Статус: Ожидание подключения...</div>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+
+        const userId = tg.initDataUnsafe?.user?.id || Math.floor(Math.random() * 1000000);
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${wsProtocol}//${window.location.host}`);
+
+        ws.onopen = () => {
+            document.getElementById('status').innerText = 'Статус: Подключено к серверу';
+        };
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (data.type === 'GAME_START') {
+                document.getElementById('status').innerHTML = `🎮 <b>Игра началась!</b><br>Банк: ${data.bank} ⭐<br>Призовой фонд: ${data.prize} ⭐<br>Комиссия сервиса (10%): ${data.fee} ⭐`;
+            }
+        };
+
+        function joinGame() {
+            const betAmount = parseInt(document.getElementById('betInput').value) || 10;
+            const roomId = 'room_1';
+            ws.send(JSON.stringify({
+                type: 'JOIN_GAME',
+                roomId: roomId,
+                betAmount: betAmount,
+                userId: userId
+            }));
+            document.getElementById('status').innerText = 'Ищем соперника...';
+        }
+    </script>
+</body>
+</html>
