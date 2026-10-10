@@ -16,9 +16,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
 const rooms = {};
-const ADMIN_IDS = [123456789]; // Вставьте сюда ваш Telegram ID
+const ADMIN_IDS = [123456789]; // Замените на ваш Telegram ID
 
-// Генерация колоды
 function createDeck(cardCount = 36) {
     const suits = ['♠', '♥', '♦', '♣'];
     const values = cardCount === 24 
@@ -37,36 +36,72 @@ function createDeck(cardCount = 36) {
 io.on('connection', (socket) => {
     let currentUser = null;
 
-    // Инициализация и регистрация пользователя
+    // Авторизация / Инициализация
     socket.on('INIT_USER', async (userData) => {
         currentUser = userData;
         socket.join(`user_${userData.id}`);
 
         if (supabase) {
             let { data: user } = await supabase.from('users').select('*').eq('telegram_id', userData.id).single();
+            const now = new Date();
+
             if (!user) {
                 const referrerId = userData.start_param ? parseInt(userData.start_param) : null;
                 
-                // Создание нового аккаунта
-                await supabase.from('users').insert({
+                const newUser = {
                     telegram_id: userData.id,
                     username: userData.username || 'Игрок',
-                    first_name: userData.first_name || '',
+                    first_name: userData.first_name || 'Игрок',
                     photo_url: userData.photo_url || '',
+                    stars_balance: 0,
+                    bonus_balance: 10, // Бонус 10 звезд при первом зачислении
+                    last_daily_claim: now.toISOString(),
                     referrer_id: referrerId,
                     is_admin: ADMIN_IDS.includes(userData.id)
-                });
+                };
 
-                // Бонус рефереру (+10 звёзд)
-                if (referrerId) {
-                    await supabase.rpc('increment_balance', { user_id: referrerId, amount: 10 });
+                const { data: createdUser } = await supabase.from('users').insert(newUser).select().single();
+                user = createdUser || newUser;
+
+                // Если есть реферер - даем ему +10 звезд
+                if (referrerId && referrerId !== userData.id) {
+                    await supabase.rpc('increment_balance', { user_id: referrerId, amount: 10 }).catch(() => {});
                 }
             }
+
             socket.emit('USER_DATA', user);
+        } else {
+            // Заглушка если Supabase временно не подключен
+            socket.emit('USER_DATA', {
+                telegram_id: userData.id,
+                first_name: userData.first_name || 'Игрок',
+                stars_balance: 50,
+                bonus_balance: 10,
+                level: 1,
+                wins: 0,
+                losses: 0
+            });
         }
     });
 
-    // Список комнат
+    // Запрос лидерборда (Топ-50 игроков по победам)
+    socket.on('GET_LEADERBOARD', async () => {
+        if (supabase) {
+            const { data: leaders } = await supabase
+                .from('users')
+                .select('username, first_name, wins, level')
+                .order('wins', { ascending: false })
+                .limit(50);
+            socket.emit('LEADERBOARD_DATA', leaders || []);
+        } else {
+            socket.emit('LEADERBOARD_DATA', [
+                { first_name: "Александр", wins: 15, level: 2 },
+                { first_name: "Ricky", wins: 8, level: 1 }
+            ]);
+        }
+    });
+
+    // Получение списка открытых комнат
     socket.on('GET_ROOMS', () => {
         const publicRooms = Object.values(rooms)
             .filter(r => r.state === 'WAITING')
@@ -86,9 +121,9 @@ io.on('connection', (socket) => {
         const roomId = `room_${Date.now()}`;
         rooms[roomId] = {
             id: roomId,
-            mode, // 'podkidnoy' или 'perevodnoy'
-            deckSize: parseInt(deckSize),
-            bet: parseInt(bet),
+            mode: mode || 'podkidnoy',
+            deckSize: parseInt(deckSize) || 36,
+            bet: parseInt(bet) || 10,
             players: [{ id: user.id, name: user.first_name, level: user.level || 1, socketId: socket.id, hand: [] }],
             state: 'WAITING',
             turnTimer: null,
@@ -112,28 +147,42 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Ежедневный бонус
+    // Ежедневный бонус с точным таймером
     socket.on('CLAIM_DAILY_BONUS', async (userId) => {
-        if (!supabase) return;
+        if (!supabase) {
+            socket.emit('BONUS_CLAIMED', { success: false, message: 'База данных не подключена' });
+            return;
+        }
+
         let { data: user } = await supabase.from('users').select('*').eq('telegram_id', userId).single();
-        
+        if (!user) return;
+
         const now = new Date();
         const lastClaim = user.last_daily_claim ? new Date(user.last_daily_claim) : null;
+        const cooldown = 24 * 60 * 60 * 1000; // 24 часа
 
-        if (!lastClaim || (now - lastClaim) > 24 * 60 * 60 * 1000) {
+        if (!lastClaim || (now - lastClaim) >= cooldown) {
+            const newBonus = (user.bonus_balance || 0) + 10;
             await supabase.from('users').update({
-                bonus_balance: user.bonus_balance + 10,
+                bonus_balance: newBonus,
                 last_daily_claim: now.toISOString()
             }).eq('telegram_id', userId);
             
-            socket.emit('BONUS_CLAIMED', { success: true, amount: 10 });
+            socket.emit('BONUS_CLAIMED', { success: true, amount: 10, newBonusBalance: newBonus });
         } else {
-            socket.emit('BONUS_CLAIMED', { success: false, message: 'Бонус уже получен сегодня!' });
+            const nextClaimTime = new Date(lastClaim.getTime() + cooldown);
+            const diffMs = nextClaimTime - now;
+            const hours = Math.floor(diffMs / (1000 * 60 * 60));
+            const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+
+            socket.emit('BONUS_CLAIMED', { 
+                success: false, 
+                message: `Бонус уже забран! До следующего бонуса: ${hours} ч. ${minutes} мин.` 
+            });
         }
     });
 });
 
-// Запуск партий и таймера
 function startGame(room) {
     room.state = 'PLAYING';
     room.deck = createDeck(room.deckSize);
@@ -143,7 +192,7 @@ function startGame(room) {
     room.trumpCard = room.deck[room.deck.length - 1];
     
     const totalBank = room.bet * 2;
-    const adminFee = Math.floor(totalBank * 0.10); // 10% комиссия
+    const adminFee = Math.floor(totalBank * 0.10);
     const winPrize = totalBank - adminFee;
 
     room.winPrize = winPrize;
@@ -185,4 +234,4 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`CardFool Server running on port ${PORT}`);
 });
-              
+        
