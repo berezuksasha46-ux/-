@@ -1,34 +1,13 @@
--- Таблица пользователей
-CREATE TABLE IF NOT EXISTS users (
-    telegram_id BIGINT PRIMARY KEY,
-    username TEXT,
-    first_name TEXT,
-    photo_url TEXT,
-    stars_balance INT DEFAULT 50,
-    bonus_balance INT DEFAULT 0,
-    wins INT DEFAULT 0,
-    losses INT DEFAULT 0,
-    games_played INT DEFAULT 0,
-    level INT DEFAULT 1,
-    referrer_id BIGINT REFERENCES users(telegram_id),
-    last_daily_claim TIMESTAMP WITH TIME ZONE,
-    is_admin BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- Таблица заработка администратора (10% комиссия)
-CREATE TABLE IF NOT EXISTS admin_earnings (
-    id SERIAL PRIMARY KEY,
-    game_id TEXT,
-    amount INT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- Таблица реферальных выплат
-CREATE TABLE IF NOT EXISTS referral_earnings (
-    id SERIAL PRIMARY KEY,
-    referrer_id BIGINT,
-    referred_id BIGINT,
-    amount INT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
+{
+  "name": "durak-game",
+  "version": "2.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5",
+    "@supabase/supabase-js": "^2.42.0"
+  }
+}
