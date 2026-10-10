@@ -1,369 +1,601 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>CardFool — Онлайн Дурак</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <script src="/socket.io/socket.io.js"></script>
-    <style>
-        :root {
-            --bg-deep: #0e071b;
-            --bg-card: #190f33;
-            --accent-purple: #8b5cf6;
-            --accent-glow: #a78bfa;
-            --accent-gold: #fbbf24;
-            --text-color: #f3e8ff;
-            --text-muted: #9ca3af;
-        }
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const { createClient } = require('@supabase/supabase-js');
+const path = require('path');
+const cors = require('cors');
 
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background-color: var(--bg-deep);
-            background-image: 
-                radial-gradient(circle at 15% 15%, rgba(139, 92, 246, 0.15) 0%, transparent 45%),
-                radial-gradient(circle at 85% 85%, rgba(109, 40, 217, 0.15) 0%, transparent 45%),
-                linear-gradient(135deg, #0e071b 0%, #170b2e 100%);
-            color: var(--text-color);
-            margin: 0; padding: 0;
-            display: flex; flex-direction: column; height: 100vh;
-            overflow: hidden;
-            position: relative;
-        }
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: "*" }
+});
 
-        /* Водяные знаки мастей */
-        body::before {
-            content: "♠ ♥ ♦ ♣ ♠ ♥ ♦ ♣ ♠ ♥ ♦ ♣";
-            position: absolute;
-            top: 50%; left: 50%;
-            transform: translate(-50%, -50%) rotate(-15deg);
-            font-size: 80px; letter-spacing: 40px;
-            color: rgba(139, 92, 246, 0.03);
-            pointer-events: none; white-space: nowrap; z-index: 0;
-        }
+app.use(cors());
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
 
-        .header-bar, .content, .navbar, .modal { position: relative; z-index: 1; }
+// Supabase Configuration (с авто-фоллбеком в память при отсутствии ключей)
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://your-supabase-url.supabase.co';
+const SUPABASE_KEY = process.env.SUPABASE_KEY || 'your-supabase-key';
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-        .header-bar {
-            background: rgba(25, 15, 51, 0.9);
-            backdrop-filter: blur(12px);
-            padding: 12px 16px;
-            display: flex; justify-content: space-between; align-items: center;
-            border-bottom: 1px solid rgba(139, 92, 246, 0.25);
-        }
-        .user-info { display: flex; align-items: center; gap: 8px; font-weight: bold; font-size: 15px; }
-        .balance-chip {
-            background: rgba(251, 191, 36, 0.15);
-            border: 1px solid var(--accent-gold);
-            color: var(--accent-gold);
-            padding: 6px 14px; border-radius: 20px;
-            font-weight: bold; font-size: 14px; cursor: pointer;
-            display: flex; align-items: center; gap: 6px;
-            box-shadow: 0 0 15px rgba(251, 191, 36, 0.15);
-        }
+let useMemoryFallback = false;
+const memoryUsers = new Map();
 
-        .content { flex: 1; overflow-y: auto; padding: 16px; padding-bottom: 80px; }
-        .page { display: none; }
-        .page.active { display: block; }
+async function dbGetOrCreateUser(telegramId, userData) {
+  if (useMemoryFallback) {
+    if (!memoryUsers.has(telegramId)) {
+      memoryUsers.set(telegramId, {
+        telegram_id: telegramId,
+        username: userData.username || 'Player',
+        first_name: userData.first_name || 'Gamer',
+        stars_balance: 0,
+        wins: 0,
+        losses: 0,
+        level: 1,
+        last_daily_claim: null,
+        referrer_id: userData.referrer_id || null,
+        is_admin: false
+      });
+    }
+    return memoryUsers.get(telegramId);
+  }
 
-        .card { 
-            background: var(--bg-card); border-radius: 16px; padding: 16px; margin-bottom: 12px; 
-            border: 1px solid rgba(139, 92, 246, 0.25);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-        }
-        /* Подсветка своего собственного стола */
-        .card.my-room {
-            border: 2px solid var(--accent-gold);
-            box-shadow: 0 0 20px rgba(251, 191, 36, 0.25);
-            background: linear-gradient(135deg, #190f33 0%, #2a1548 100%);
-        }
-        
-        .btn {
-            background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%); 
-            color: white; font-weight: bold; border: none; border-radius: 12px; 
-            padding: 14px; width: 100%; font-size: 15px; cursor: pointer; margin-top: 8px;
-            display: flex; justify-content: center; align-items: center; gap: 6px;
-            box-shadow: 0 4px 15px rgba(139, 92, 246, 0.3);
-        }
-        .btn:active { transform: scale(0.98); }
-        .btn-green { background: linear-gradient(135deg, #10b981 0%, #059669 100%); box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3); }
-        .btn-outline { background: transparent; border: 2px solid var(--accent-purple); color: var(--accent-glow); box-shadow: none; }
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('telegram_id', telegramId)
+      .single();
 
-        .navbar {
-            position: fixed; bottom: 0; left: 0; right: 0;
-            background: rgba(25, 15, 51, 0.95); backdrop-filter: blur(10px);
-            display: flex; justify-content: space-around; padding: 10px 0;
-            border-top: 1px solid rgba(139, 92, 246, 0.25);
-        }
-        .nav-item {
-            color: var(--text-muted); text-decoration: none; font-size: 11px;
-            display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer;
-        }
-        .nav-item.active { color: var(--accent-glow); font-weight: bold; text-shadow: 0 0 10px rgba(167, 139, 250, 0.5); }
-        .nav-icon { font-size: 20px; }
+    if (error && error.code === 'PGRST116') {
+      const newUser = {
+        telegram_id: telegramId,
+        username: userData.username || 'Player',
+        first_name: userData.first_name || 'Gamer',
+        stars_balance: 0,
+        wins: 0,
+        losses: 0,
+        level: 1,
+        last_daily_claim: null,
+        referrer_id: userData.referrer_id || null,
+        is_admin: false
+      };
+      const { data: inserted, error: insertErr } = await supabase
+        .from('users')
+        .insert([newUser])
+        .select()
+        .single();
+      if (insertErr) throw insertErr;
+      return inserted;
+    } else if (error) {
+      throw error;
+    }
+    return data;
+  } catch (err) {
+    console.warn('Supabase error, switching to memory fallback:', err.message);
+    useMemoryFallback = true;
+    return dbGetOrCreateUser(telegramId, userData);
+  }
+}
 
-        .modal {
-            display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(14, 7, 27, 0.85); backdrop-filter: blur(5px); z-index: 100;
-            justify-content: center; align-items: center; padding: 20px;
-        }
-        .modal-content {
-            background: var(--bg-card); width: 100%; max-width: 360px;
-            border-radius: 20px; padding: 20px; border: 1px solid rgba(139, 92, 246, 0.4);
-            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
-        }
-        .select-group { margin-bottom: 12px; text-align: left; }
-        .select-group label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
-        .select-group select {
-            width: 100%; padding: 12px; background: #0e071b; color: white;
-            border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 10px; font-size: 14px;
-        }
+async function dbUpdateUser(telegramId, updateFields) {
+  if (useMemoryFallback) {
+    const user = memoryUsers.get(telegramId);
+    if (user) {
+      Object.assign(user, updateFields);
+      memoryUsers.set(telegramId, user);
+    }
+    return user;
+  }
 
-        .leader-item {
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 12px 0; border-bottom: 1px solid rgba(139, 92, 246, 0.15);
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .update(updateFields)
+      .eq('telegram_id', telegramId)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  } catch (err) {
+    console.warn('Supabase update error:', err.message);
+    useMemoryFallback = true;
+    return dbUpdateUser(telegramId, updateFields);
+  }
+}
+
+async function dbGetLeaderboard() {
+  if (useMemoryFallback) {
+    return Array.from(memoryUsers.values())
+      .filter(u => u.wins > 0)
+      .sort((a, b) => b.wins - a.wins)
+      .slice(0, 50);
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('telegram_id, username, first_name, stars_balance, wins, level')
+      .gt('wins', 0)
+      .order('wins', { ascending: false })
+      .limit(50);
+    if (error) throw error;
+    return data;
+  } catch (err) {
+    useMemoryFallback = true;
+    return dbGetLeaderboard();
+  }
+}
+
+// Игровая логика
+const tables = new Map(); // tableId -> Table Object
+const activeGames = new Map(); // gameId -> Game State
+
+function createDeck(deckSize) {
+  const suits = ['♠', '♥', '♦', '♣'];
+  const ranks24 = ['9', '10', 'J', 'Q', 'K', 'A'];
+  const ranks36 = ['6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+  const ranks = deckSize === 24 ? ranks24 : ranks36;
+  const rankValues = { '6':6, '7':7, '8':8, '9':9, '10':10, 'J':11, 'Q':12, 'K':13, 'A':14 };
+
+  let deck = [];
+  for (let s of suits) {
+    for (let r of ranks) {
+      deck.push({ suit: s, rank: r, value: rankValues[r] });
+    }
+  }
+  // Перемешивание (Fisher-Yates)
+  for (let i = deck.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [deck[i], deck[j]] = [deck[j], deck[i]];
+  }
+  return deck;
+}
+
+function cardComparator(c1, c2, trumpSuit) {
+  if (c1.suit === c2.suit) return c1.value - c2.value;
+  if (c1.suit === trumpSuit) return 1;
+  if (c2.suit === trumpSuit) return -1;
+  return 0;
+}
+
+io.on('connection', (socket) => {
+  let currentUser = null;
+
+  socket.on('auth', async (data) => {
+    const { telegram_id, username, first_name, referrer_id } = data;
+    currentUser = await dbGetOrCreateUser(telegram_id, { username, first_name, referrer_id });
+    
+    // Обработка реферала при первом входе
+    if (referrer_id && !currentUser.referrer_id && Number(referrer_id) !== Number(telegram_id)) {
+      await dbUpdateUser(telegram_id, { referrer_id: Number(referrer_id) });
+      const refUser = await dbGetOrCreateUser(Number(referrer_id), {});
+      if (refUser) {
+        await dbUpdateUser(Number(referrer_id), { stars_balance: refUser.stars_balance + 10 });
+      }
+    }
+
+    socket.emit('auth_success', currentUser);
+    emitLobbies();
+  });
+
+  socket.on('claim_daily', async () => {
+    if (!currentUser) return;
+    const now = new Date();
+    const lastClaim = currentUser.last_daily_claim ? new Date(currentUser.last_daily_claim) : null;
+    
+    if (lastClaim && (now - lastClaim) < 24 * 60 * 60 * 1000) {
+      const diff = 24 * 60 * 60 * 1000 - (now - lastClaim);
+      const hours = Math.floor(diff / (1000 * 60 * 60));
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      socket.emit('daily_error', { message: `Ежедневный бонус уже получен. Следующий доступен через ${hours} ч. ${minutes} мин.` });
+      return;
+    }
+
+    currentUser.stars_balance += 10;
+    currentUser.last_daily_claim = now.toISOString();
+    await dbUpdateUser(currentUser.telegram_id, {
+      stars_balance: currentUser.stars_balance,
+      last_daily_claim: currentUser.last_daily_claim
+    });
+    socket.emit('auth_success', currentUser);
+    socket.emit('daily_success', { amount: 10 });
+  });
+
+  socket.on('create_table', async (config) => {
+    if (!currentUser) return;
+    const { mode, deckSize, stake } = config; // mode: 'podkidnoy' | 'perevodnoy'
+
+    if (currentUser.stars_balance < stake) {
+      socket.emit('error_message', 'Недостаточно звезд на балансе!');
+      return;
+    }
+
+    // Проверка лимита: строго 1 активный стол в ожидании
+    for (let t of tables.values()) {
+      if (t.hostId === currentUser.telegram_id && t.status === 'waiting') {
+        socket.emit('error_message', 'У вас уже есть активный созданный стол!');
+        return;
+      }
+    }
+
+    const tableId = 'table_' + Math.random().toString(36).substr(2, 9);
+    const newTable = {
+      id: tableId,
+      hostId: currentUser.telegram_id,
+      hostName: currentUser.first_name || currentUser.username,
+      hostLevel: currentUser.level || 1,
+      mode,
+      deckSize: Number(deckSize),
+      stake: Number(stake),
+      status: 'waiting'
+    };
+
+    tables.set(tableId, newTable);
+    socket.emit('table_created', tableId);
+    emitLobbies();
+  });
+
+  socket.on('join_table', async (tableId) => {
+    if (!currentUser) return;
+    const table = tables.get(tableId);
+    if (!table || table.status !== 'waiting') {
+      socket.emit('error_message', 'Стол не найден или уже запущен!');
+      return;
+    }
+    if (table.hostId === currentUser.telegram_id) {
+      socket.emit('error_message', 'Нельзя присоединиться к своему столу!');
+      return;
+    }
+    if (currentUser.stars_balance < table.stake) {
+      socket.emit('error_message', 'Недостаточно звезд для входа на этот стол!');
+      return;
+    }
+
+    // Списание ставок с обоих
+    const hostUser = await dbGetOrCreateUser(table.hostId, {});
+    if (hostUser.stars_balance < table.stake) {
+      tables.delete(tableId);
+      emitLobbies();
+      socket.emit('error_message', 'У создателя стола недостаточно средств!');
+      return;
+    }
+
+    await dbUpdateUser(hostUser.telegram_id, { stars_balance: hostUser.stars_balance - table.stake });
+    await dbUpdateUser(currentUser.telegram_id, { stars_balance: currentUser.stars_balance - table.stake });
+    
+    currentUser.stars_balance -= table.stake;
+    socket.emit('auth_success', currentUser);
+
+    table.status = 'playing';
+    const gameId = 'game_' + tableId;
+    table.gameId = gameId;
+
+    // Инициализация игры
+    const deck = createDeck(table.deckSize);
+    const trumpCard = deck[deck.length - 1];
+    const p1Hand = deck.splice(0, 6);
+    const p2Hand = deck.splice(0, 6);
+
+    const gameState = {
+      gameId,
+      tableId,
+      mode: table.mode,
+      stake: table.stake,
+      deck,
+      trumpCard,
+      players: [
+        { id: hostUser.telegram_id, name: hostUser.first_name, level: hostUser.level, hand: p1Hand, socketId: null },
+        { id: currentUser.telegram_id, name: currentUser.first_name, level: currentUser.level, hand: p2Hand, socketId: socket.id }
+      ],
+      attackerIndex: 0, // 0 или 1
+      defenderIndex: 1,
+      tableCards: [], // массив пар {attack, defend: null}
+      status: 'playing',
+      timer: 15,
+      timerInterval: null
+    };
+
+    // Находим socketId хоста
+    for (let s of io.sockets.sockets.values()) {
+      // Можно привязать socket к telegram_id при auth
+      if (s.handshake.query.telegram_id == hostUser.telegram_id || s._telegram_id == hostUser.telegram_id) {
+        gameState.players[0].socketId = s.id;
+        s.join(gameId);
+      }
+    }
+    socket.join(gameId);
+    gameState.players[1].socketId = socket.id;
+
+    activeGames.set(gameId, gameState);
+    tables.delete(tableId);
+    emitLobbies();
+
+    startGameLoop(gameId);
+  });
+
+  socket.on('set_socket_user', (telegram_id) => {
+    socket._telegram_id = telegram_id;
+  });
+
+  socket.on('game_action', (data) => {
+    handleGameAction(socket, data);
+  });
+
+  socket.on('get_lobbies', () => {
+    emitLobbies(socket);
+  });
+
+  async function emitLobbies(targetSocket = io) {
+    const list = Array.from(tables.values());
+    targetSocket.emit('lobbies_list', { tables: list, currentUserId: currentUser?.telegram_id });
+  }
+});
+
+function startGameLoop(gameId) {
+  const game = activeGames.get(gameId);
+  if (!game) return;
+
+  broadcastGameState(game);
+  resetTurnTimer(game);
+}
+
+function resetTurnTimer(game) {
+  if (game.timerInterval) clearInterval(game.timerInterval);
+  game.timer = 15;
+
+  game.timerInterval = setInterval(() => {
+    game.timer--;
+    io.to(game.gameId).emit('timer_update', game.timer);
+
+    if (game.timer <= 0) {
+      clearInterval(game.timerInterval);
+      // Авто-действие по таймауту (если защищается - берет карты, если атакует - пасует/завершает)
+      handleTimeout(game);
+    }
+  }, 1000);
+}
+
+function handleTimeout(game) {
+  const defender = game.players[game.defenderIndex];
+  // Автоматический «Беру» для защищающегося или «Бито» / авто-пас для атаки
+  if (game.tableCards.length > 0 && game.tableCards.some(c => !c.defend)) {
+    // Защитник берет все карты
+    defender.hand.push(...game.tableCards.map(c => c.attack));
+    if (c => c.defend) defender.hand.push(...game.tableCards.filter(c => c.defend).map(c => c.defend));
+    game.tableCards = [];
+    // Меняем роли
+    const temp = game.attackerIndex;
+    game.attackerIndex = game.defenderIndex;
+    game.defenderIndex = temp;
+    refillHands(game);
+    checkWinCondition(game);
+  } else {
+    // Смена хода
+    game.tableCards = [];
+    const temp = game.attackerIndex;
+    game.attackerIndex = game.defenderIndex;
+    game.defenderIndex = temp;
+    refillHands(game);
+    checkWinCondition(game);
+  }
+  broadcastGameState(game);
+  if (game.status === 'playing') resetTurnTimer(game);
+}
+
+function refillHands(game) {
+  while (game.players[game.attackerIndex].hand.length < 6 && game.deck.length > 0) {
+    game.players[game.attackerIndex].hand.push(game.deck.pop());
+  }
+  while (game.players[game.defenderIndex].hand.length < 6 && game.deck.length > 0) {
+    game.players[game.defenderIndex].hand.push(game.deck.pop());
+  }
+}
+
+function broadcastGameState(game) {
+  const p1 = game.players[0];
+  const p2 = game.players[1];
+
+  io.to(game.gameId).emit('game_state', {
+    gameId: game.gameId,
+    mode: game.mode,
+    stake: game.stake,
+    trumpCard: game.trumpCard,
+    deckCount: game.deck.length,
+    tableCards: game.tableCards,
+    attackerIndex: game.attackerIndex,
+    defenderIndex: game.defenderIndex,
+    players: [
+      { id: p1.id, name: p1.name, level: p1.level, handCount: p1.hand.length, hand: p1.id === p1IdPlaceholder ? p1.hand : null },
+      { id: p2.id, name: p2.name, level: p2.level, handCount: p2.hand.length }
+    ]
+  });
+
+  // Отправляем персонально руки игрокам
+  for (let p of game.players) {
+    const sock = io.sockets.sockets.get(p.socketId);
+    if (sock) {
+      sock.emit('your_hand', p.hand);
+      sock.emit('is_my_turn', game.players[game.attackerIndex].id === p.id || (game.tableCards.length > 0 && game.players[game.defenderIndex].id === p.id));
+    }
+  }
+}
+const p1IdPlaceholder = null; // helper
+
+async function handleGameAction(socket, data) {
+  const { gameId, action, cardIndex, targetCardIndex } = data;
+  const game = activeGames.get(gameId);
+  if (!game || game.status !== 'playing') return;
+
+  const playerIdx = game.players.findIndex(p => p.socketId === socket.id);
+  if (playerIdx === -1) return;
+
+  const isAttacker = game.attackerIndex === playerIdx;
+  const isDefender = game.defenderIndex === playerIdx;
+
+  if (action === 'attack' && isAttacker) {
+    const card = game.players[playerIdx].hand[cardIndex];
+    if (!card) return;
+
+    // Проверка возможности подкидывания (ранг должен совпадать с имеющимися на столе картами)
+    if (game.tableCards.length > 0) {
+      const ranksOnTable = new Set();
+      game.tableCards.forEach(tc => {
+        ranksOnTable.add(tc.attack.rank);
+        if (tc.defend) ranksOnTable.add(tc.defend.rank);
+      });
+      if (!ranksOnTable.has(card.rank)) return;
+    }
+
+    game.players[playerIdx].hand.splice(cardIndex, 1);
+    game.tableCards.push({ attack: card, defend: null });
+    resetTurnTimer(game);
+    broadcastGameState(game);
+    checkWinCondition(game);
+  } 
+  else if (action === 'defend' && isDefender) {
+    const attackPair = game.tableCards.find(tc => !tc.defend);
+    if (!attackPair) return;
+
+    const defCard = game.players[playerIdx].hand[cardIndex];
+    if (!defCard) return;
+
+    // Проверяем возможность побить карту
+    const isValid = (defCard.suit === attackPair.attack.suit && defCard.value > attackPair.attack.value) ||
+                    (defCard.suit === game.trumpCard.suit && attackPair.attack.suit !== game.trumpCard.suit);
+
+    if (isValid) {
+      game.players[playerIdx].hand.splice(cardIndex, 1);
+      attackPair.defend = defCard;
+      resetTurnTimer(game);
+      broadcastGameState(game);
+      checkWinCondition(game);
+    } else {
+      socket.emit('error_message', 'Этой картой побить нельзя!');
+    }
+  }
+  else if (action === 'transfer' && isDefender && game.mode === 'perevodnoy') {
+    // Переводной дурак: можно перевести, если есть карта того же ранга что и последняя атака, и на столе нет отбитых карт (или все не отбиты, правила классики)
+    const attackPair = game.tableCards.find(tc => !tc.defend);
+    const card = game.players[playerIdx].hand[cardIndex];
+    if (!attackPair || !card || card.rank !== attackPair.attack.rank) return;
+    if (game.tableCards.some(tc => tc.defend)) return; // перевод только пока не начали отбивать
+
+    game.players[playerIdx].hand.splice(cardIndex, 1);
+    game.tableCards.push({ attack: card, defend: null });
+    // Меняем роли атакующего и защищающегося местами!
+    const temp = game.attackerIndex;
+    game.attackerIndex = game.defenderIndex;
+    game.defenderIndex = temp;
+    resetTurnTimer(game);
+    broadcastGameState(game);
+  }
+  else if (action === 'take' && isDefender) {
+    // Защитник берет все карты со стола
+    const cardsToTake = [];
+    game.tableCards.forEach(tc => {
+      cardsToTake.push(tc.attack);
+      if (tc.defend) cardsToTake.push(tc.defend);
+    });
+    game.players[playerIdx].hand.push(...cardsToTake);
+    game.tableCards = [];
+
+    // Атакующий ходит снова, защитник пропускает ход (меняем только если атакующий бил, а тут защитник взял, значит атакующий ходит опять или следующий)
+    const temp = game.attackerIndex;
+    game.attackerIndex = game.defenderIndex;
+    game.defenderIndex = temp;
+
+    refillHands(game);
+    resetTurnTimer(game);
+    broadcastGameState(game);
+    checkWinCondition(game);
+  }
+  else if (action === 'done' && isAttacker) {
+    // Атакующий завершает ход (все отбито)
+    if (game.tableCards.length > 0 && game.tableCards.every(tc => tc.defend)) {
+      game.tableCards = [];
+      const temp = game.attackerIndex;
+      game.attackerIndex = game.defenderIndex;
+      game.defenderIndex = temp;
+      refillHands(game);
+      resetTurnTimer(game);
+      broadcastGameState(game);
+      checkWinCondition(game);
+    }
+  }
+}
+
+async function checkWinCondition(game) {
+  if (game.deck.length === 0) {
+    const p1Empty = game.players[0].hand.length === 0;
+    const p2Empty = game.players[1].hand.length === 0;
+
+    if (p1Empty || p2Empty) {
+      if (game.timerInterval) clearInterval(game.timerInterval);
+      game.status = 'finished';
+
+      let winner = null;
+      let loser = null;
+
+      if (p1Empty && !p2Empty) {
+        winner = game.players[0];
+        loser = game.players[1];
+      } else if (p2Empty && !p1Empty) {
+        winner = game.players[1];
+        loser = game.players[0];
+      } else {
+        // Ничья или кто первый скинул
+        winner = game.players[0];
+        loser = game.players[1];
+      }
+
+      // Расчет банка и комиссии 10%
+      const totalPot = game.stake * 2;
+      const commission = totalPot * 0.10;
+      const prize = totalPot - commission;
+
+      const winnerUser = await dbGetOrCreateUser(winner.id, {});
+      const loserUser = await dbGetOrCreateUser(loser.id, {});
+
+      await dbUpdateUser(winner.id, {
+        stars_balance: winnerUser.stars_balance + Math.floor(prize),
+        wins: winnerUser.wins + 1,
+        level: Math.floor((winnerUser.wins + 1) / 5) + 1
+      });
+
+      await dbUpdateUser(loser.id, {
+        losses: loserUser.losses + 1
+      });
+
+      // Реферальный бонус 5% от ставок для аплайна
+      if (winnerUser.referrer_id) {
+        const refUser = await dbGetOrCreateUser(winnerUser.referrer_id, {});
+        if (refUser) {
+          const refBonus = Math.floor(game.stake * 0.05);
+          await dbUpdateUser(refUser.telegram_id, { stars_balance: refUser.stars_balance + refBonus });
         }
-    </style>
-</head>
-<body>
+      }
 
-    <div class="header-bar">
-        <div class="user-info">
-            <span>🃏</span>
-            <span id="header-name">Игрок</span>
-        </div>
-        <div class="balance-chip" onclick="openBalanceModal()">
-            <span id="header-balance">0</span> ⭐ ➕
-        </div>
-    </div>
+      io.to(game.gameId).emit('game_over', {
+        winnerId: winner.id,
+        winnerName: winner.name,
+        prize: Math.floor(prize)
+      });
 
-    <div class="content">
-        <div id="page-menu" class="page active">
-            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                <button class="btn" onclick="openCreateModal()">➕ Создать стол</button>
-                <button class="btn btn-outline" onclick="createFastGame()">⚡ Быстрый поиск</button>
-            </div>
+      activeGames.delete(game.gameId);
+    }
+  }
+}
+
+app.get('/api/leaderboard', async (req, res) => {
+  const lb = await dbGetLeaderboard();
+  res.json(lb);
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`CardFool server running on port ${PORT}`);
+});
             
-            <h3 style="margin-bottom: 10px; font-size: 16px;">📜 Активные столы</h3>
-            <div id="rooms-list">
-                <div class="card"><p style="color: var(--text-muted); text-align: center;">Поиск доступных столов...</p></div>
-            </div>
-        </div>
-
-        <div id="page-leaderboard" class="page">
-            <h3 style="margin-bottom: 10px;">🏆 Топ игроков</h3>
-            <div class="card" id="leaderboard-list">
-                <p style="text-align: center; color: var(--text-muted);">Пока нет лидеров</p>
-            </div>
-        </div>
-
-        <div id="page-referrals" class="page">
-            <h3 style="margin-bottom: 10px;">🎁 Реферальная система</h3>
-            <div class="card">
-                <p style="font-size: 14px; line-height: 1.5;">Приглашайте друзей и получайте <b>+10 ⭐</b> за каждого нового игрока + <b>5%</b> от всех их ставок навсегда!</p>
-                <button class="btn" onclick="copyRefLink()">📋 Скопировать ссылку</button>
-            </div>
-        </div>
-
-        <div id="page-profile" class="page">
-            <h3 style="margin-bottom: 10px;">👤 Мой профиль</h3>
-            <div class="card" style="text-align: center; padding: 24px;">
-                <h2 id="user-name" style="margin: 0 0 10px 0;">Игрок</h2>
-                <p style="color: var(--text-muted); margin: 5px 0;">Уровень: <b id="user-level" style="color: var(--accent-glow);">1</b></p>
-                <hr style="border-color: rgba(139, 92, 246, 0.2); margin: 15px 0;">
-                <p style="margin: 5px 0;">Основной баланс: <b id="user-balance">0</b> ⭐</p>
-                <p style="margin: 5px 0;">Победы / Поражения: <b id="user-winrate">0 В / 0 П</b></p>
-                
-                <button class="btn btn-green" onclick="claimDailyBonus()" style="margin-top: 20px;">
-                    🎁 Ежедневный бонус (+10 ⭐)
-                </button>
-            </div>
-        </div>
-
-        <div id="page-game" class="page">
-            <div style="background: rgba(25, 15, 51, 0.9); border-radius: 20px; border: 2px solid var(--accent-purple); height: 320px; position: relative; padding: 10px;">
-                <div style="position: absolute; top: 10px; right: 10px; background: #ef4444; color: white; padding: 4px 10px; border-radius: 20px; font-weight: bold; font-size: 12px;" id="game-timer">⏳ 15s</div>
-                <div id="opponent-info" style="color: var(--accent-glow);">Соперник</div>
-                <div id="table-cards" style="margin-top: 60px; text-align: center;">Игра началась! Раздача карт...</div>
-            </div>
-            <div id="my-hand" style="margin-top: 15px; display: flex; gap: 5px; overflow-x: auto;"></div>
-        </div>
-    </div>
-
-    <div class="modal" id="modal-create">
-        <div class="modal-content">
-            <h3 style="margin-top: 0;">⚙️ Создание стола</h3>
-            <div class="select-group">
-                <label>Режим игры:</label>
-                <select id="create-mode">
-                    <option value="podkidnoy">Подкидной</option>
-                    <option value="perevodnoy">Переводной</option>
-                </select>
-            </div>
-            <div class="select-group">
-                <label>Колода:</label>
-                <select id="create-deck">
-                    <option value="36">36 карт</option>
-                    <option value="24">24 карты</option>
-                </select>
-            </div>
-            <div class="select-group">
-                <label>Ставка (Звёзды):</label>
-                <select id="create-bet">
-                    <option value="10">10 ⭐</option>
-                    <option value="25">25 ⭐</option>
-                    <option value="50">50 ⭐</option>
-                    <option value="100">100 ⭐</option>
-                </select>
-            </div>
-            <button class="btn" onclick="submitCreateRoom()">Создать стол</button>
-            <button class="btn btn-outline" onclick="closeCreateModal()" style="margin-top: 8px;">Отмена</button>
-        </div>
-    </div>
-
-    <div class="modal" id="modal-balance">
-        <div class="modal-content" style="text-align: center;">
-            <h3 style="margin-top: 0;">💳 Управление балансом</h3>
-            <p>Ваш баланс: <b id="modal-balance-val">0</b> ⭐</p>
-            <button class="btn btn-green" onclick="alert('Пополнение Stars через Telegram будет доступно при запуске платежного шлюза.')">➕ Пополнить</button>
-            <button class="btn" onclick="alert('Минимальная сумма для вывода — 100 ⭐.')" style="margin-top: 8px;">💸 Вывести</button>
-            <button class="btn btn-outline" onclick="closeBalanceModal()" style="margin-top: 8px;">Закрыть</button>
-        </div>
-    </div>
-
-    <div class="navbar">
-        <div class="nav-item active" onclick="switchPage('menu', this)">
-            <span class="nav-icon">🎮</span><span>Столы</span>
-        </div>
-        <div class="nav-item" onclick="switchPage('leaderboard', this)">
-            <span class="nav-icon">🏆</span><span>Рейтинг</span>
-        </div>
-        <div class="nav-item" onclick="switchPage('referrals', this)">
-            <span class="nav-icon">🎁</span><span>Друзья</span>
-        </div>
-        <div class="nav-item" onclick="switchPage('profile', this)">
-            <span class="nav-icon">👤</span><span>Профиль</span>
-        </div>
-    </div>
-
-    <script>
-        const tg = window.Telegram.WebApp;
-        tg.expand();
-
-        const socket = io();
-        const user = tg.initDataUnsafe?.user || { id: Math.floor(Math.random()*100000), first_name: "Игрок" };
-
-        document.getElementById('header-name').innerText = user.first_name;
-        document.getElementById('user-name').innerText = user.first_name;
-
-        socket.emit('INIT_USER', { ...user, start_param: tg.initDataUnsafe?.start_param });
-
-        socket.on('USER_DATA', (dbUser) => {
-            if (dbUser) {
-                document.getElementById('header-balance').innerText = dbUser.stars_balance || 0;
-                document.getElementById('modal-balance-val').innerText = dbUser.stars_balance || 0;
-                document.getElementById('user-level').innerText = dbUser.level || 1;
-                document.getElementById('user-balance').innerText = dbUser.stars_balance || 0;
-                document.getElementById('user-winrate').innerText = `${dbUser.wins || 0} В / ${dbUser.losses || 0} П`;
-            }
-        });
-
-        socket.on('ERROR_MSG', (msg) => alert(msg));
-
-        function switchPage(pageId, el) {
-            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-            document.getElementById(`page-${pageId}`).classList.add('active');
-            if (el) el.classList.add('active');
-
-            if (pageId === 'menu') socket.emit('GET_ROOMS');
-            if (pageId === 'leaderboard') socket.emit('GET_LEADERBOARD');
-        }
-
-        function openCreateModal() { document.getElementById('modal-create').style.display = 'flex'; }
-        function closeCreateModal() { document.getElementById('modal-create').style.display = 'none'; }
-        function openBalanceModal() { document.getElementById('modal-balance').style.display = 'flex'; }
-        function closeBalanceModal() { document.getElementById('modal-balance').style.display = 'none'; }
-
-        function submitCreateRoom() {
-            const mode = document.getElementById('create-mode').value;
-            const deckSize = document.getElementById('create-deck').value;
-            const bet = document.getElementById('create-bet').value;
-            socket.emit('CREATE_ROOM', { mode, deckSize, bet, user });
-            closeCreateModal();
-        }
-
-        function createFastGame() {
-            socket.emit('CREATE_ROOM', { mode: 'podkidnoy', deckSize: 36, bet: 10, user });
-        }
-
-        socket.on('ROOMS_LIST', (rooms) => {
-            const list = document.getElementById('rooms-list');
-            if (rooms.length === 0) {
-                list.innerHTML = '<div class="card"><p style="color: var(--text-muted); text-align: center;">Открытых столов нет. Создайте свой!</p></div>';
-                return;
-            }
-            // Сортируем: свои столы выносим наверх
-            rooms.sort((a, b) => (b.hostId === user.id) - (a.hostId === user.id));
-
-            list.innerHTML = rooms.map(r => {
-                const isMyRoom = r.hostId === user.id;
-                return `
-                    <div class="card ${isMyRoom ? 'my-room' : ''}">
-                        <b>${isMyRoom ? '⭐ Ваш стол: ' : ''}${r.host}</b> (Ур. ${r.hostLevel}) | Ставка: <b>${r.bet} ⭐</b><br>
-                        <small style="color: var(--text-muted);">Режим: ${r.mode === 'podkidnoy' ? 'Подкидной' : 'Переводной'} (${r.deckSize} карт)</small>
-                        ${isMyRoom ? '<p style="color: var(--accent-gold); font-size: 12px; margin: 5px 0 0 0;">Ожидание соперника...</p>' : `<button class="btn" style="margin-top: 10px;" onclick="joinRoom('${r.id}')">Присоединиться</button>`}
-                    </div>
-                `;
-            }).join('');
-        });
-
-        function joinRoom(id) { socket.emit('JOIN_ROOM', { roomId: id, user }); }
-
-        socket.on('GAME_STARTED', (data) => {
-            switchPage('game');
-            const opp = data.players.find(p => p.id !== user.id);
-            document.getElementById('opponent-info').innerText = `Соперник: ${opp ? opp.name : 'Игрок'} (${opp ? opp.cardCount : 6} карт)`;
-        });
-
-        socket.on('YOUR_HAND', (hand) => {
-            const handDiv = document.getElementById('my-hand');
-            handDiv.innerHTML = hand.map(c => `
-                <div style="background: white; color: ${c.suit==='♥'||c.suit==='♦'?'red':'black'}; width: 45px; height: 65px; border-radius: 6px; display: flex; flex-direction: column; justify-content: space-between; padding: 4px; font-weight: bold; font-size: 14px; box-shadow: 0 2px 5px rgba(0,0,0,0.3);">
-                    <span>${c.value === 14 ? 'T' : c.value === 13 ? 'К' : c.value === 12 ? 'Д' : c.value === 11 ? 'В' : c.value}</span>
-                    <span style="align-self: center; font-size: 18px;">${c.suit}</span>
-                </div>
-            `).join('');
-        });
-
-        socket.on('LEADERBOARD_DATA', (leaders) => {
-            const list = document.getElementById('leaderboard-list');
-            if (!leaders || leaders.length === 0) {
-                list.innerHTML = '<p style="text-align: center; color: var(--text-muted);">Пока нет лидеров (нужна первая победа!)</p>';
-                return;
-            }
-            list.innerHTML = leaders.map((l, i) => `
-                <div class="leader-item">
-                    <div><b>${i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i + 1 + '.'} ${l.first_name || l.username}</b> (Ур. ${l.level || 1})</div>
-                    <div style="color: var(--accent-glow); font-weight: bold;">${l.wins} побед</div>
-                </div>
-            `).join('');
-        });
-
-        function claimDailyBonus() { socket.emit('CLAIM_DAILY_BONUS', user.id); }
-
-        socket.on('BONUS_CLAIMED', (res) => { alert(res.message); });
-
-        function copyRefLink() {
-            const botUsername = tg.initDataUnsafe?.bot_username || 'CardFoolBot';
-            const link = `https://t.me/${botUsername}?start=${user.id}`;
-            navigator.clipboard.writeText(link).then(() => alert(`Ссылка скопирована:\n${link}`));
-        }
-
-        socket.on('TIMER_TICK', (data) => {
-            document.getElementById('game-timer').innerText = `⏳ ${data.timeLeft}s`;
-        });
-    </script>
-</body>
-</html>
-                    
