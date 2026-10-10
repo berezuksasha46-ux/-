@@ -2,58 +2,191 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Дурак на Звёзды</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>CardFool — Дурак на Звёзды</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
     <style>
-        body { font-family: Arial, sans-serif; background: #0f172a; color: #fff; text-align: center; padding: 20px; margin: 0; }
-        h1 { font-size: 24px; margin-bottom: 10px; }
-        .card { background: #1e293b; padding: 15px; border-radius: 12px; margin-top: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
-        button { background: #38bdf8; color: #0f172a; border: none; padding: 12px 20px; font-size: 16px; font-weight: bold; border-radius: 8px; cursor: pointer; width: 100%; margin-top: 10px; }
-        button:active { background: #0ea5e9; }
-        input { width: 100%; padding: 10px; font-size: 16px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #fff; box-sizing: border-box; margin-top: 5px; }
-        #status { margin-top: 15px; font-size: 14px; color: #94a3b8; }
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --accent-color: #38bdf8;
+            --text-color: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0; padding: 0;
+            display: flex; flex-direction: column; height: 100vh;
+            overflow: hidden;
+        }
+
+        .content { flex: 1; overflow-y: auto; padding: 16px; padding-bottom: 70px; }
+        .page { display: none; }
+        .page.active { display: block; }
+
+        .card { background: var(--card-bg); border-radius: 16px; padding: 16px; margin-bottom: 12px; }
+        .btn {
+            background: var(--accent-color); color: #0f172a; font-weight: bold;
+            border: none; border-radius: 12px; padding: 12px 16px; width: 100%;
+            font-size: 16px; cursor: pointer; margin-top: 8px;
+        }
+        .btn-green { background: #22c55e; color: white; }
+        .btn:active { opacity: 0.8; }
+
+        .navbar {
+            position: fixed; bottom: 0; left: 0; right: 0;
+            background: #1e293b; display: flex; justify-content: space-around;
+            padding: 10px 0; border-top: 1px solid #334155;
+        }
+        .nav-item {
+            color: var(--text-muted); text-decoration: none; font-size: 11px;
+            display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer;
+        }
+        .nav-item.active { color: var(--accent-color); font-weight: bold; }
+        .nav-icon { font-size: 20px; }
+
+        .poker-table {
+            background: #064e3b; border-radius: 20px; border: 4px solid #059669;
+            height: 320px; position: relative; padding: 10px; margin-top: 10px;
+        }
+        .timer-badge {
+            position: absolute; top: 10px; right: 10px; background: #ef4444;
+            color: white; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: bold;
+        }
     </style>
 </head>
 <body>
-    <h1>🃏 Дурак на Звёзды</h1>
-    <div class="card">
-        <p>Ставка (в Звёздах):</p>
-        <input type="number" id="betInput" value="10" min="1">
-        <button onclick="joinGame()">Найти игру</button>
-        <div id="status">Статус: Ожидание подключения...</div>
+
+    <div class="content">
+        <!-- 1. МЕНЮ / ЛОББИ -->
+        <div id="page-menu" class="page active">
+            <h2>🃏 Игровые столы</h2>
+            <button class="btn" onclick="createFastGame()">⚡ Быстрая игра (10 ⭐)</button>
+            <div id="rooms-list" style="margin-top: 15px;">
+                <div class="card"><p style="color: var(--text-muted);">Поиск открытых столов...</p></div>
+            </div>
+        </div>
+
+        <!-- 2. ЛИДЕРБОРД -->
+        <div id="page-leaderboard" class="page">
+            <h2>🏆 Топ игроков</h2>
+            <div class="card">
+                <p>1. 👑 @alex — 142 победы</p>
+                <p>2. 🥈 @dmitry — 98 побед</p>
+                <p>3. 🥉 @pavel — 85 побед</p>
+            </div>
+        </div>
+
+        <!-- 3. РЕФЕРАЛЫ -->
+        <div id="page-referrals" class="page">
+            <h2>🎁 Рефералы</h2>
+            <div class="card">
+                <p>Приглашай друзей и получай <b>+10 ⭐</b> за каждого + <b>5%</b> от их трат навсегда!</p>
+                <button class="btn" onclick="copyRefLink()">📋 Скопировать ссылку</button>
+            </div>
+        </div>
+
+        <!-- 4. ПРОФИЛЬ -->
+        <div id="page-profile" class="page">
+            <h2>👤 Профиль</h2>
+            <div class="card" style="text-align: center;">
+                <h3 id="user-name">Загрузка...</h3>
+                <p>Уровень: <b id="user-level" style="color: var(--accent-color);">1</b></p>
+                <p>Основной баланс: <b id="user-balance">0</b> ⭐</p>
+                <p>Бонусы (отыгрыш): <b id="bonus-balance" style="color: #f59e0b;">10</b> ⭐</p>
+                <p>Винрейт: <b id="user-winrate">0%</b></p>
+                <button class="btn btn-green" onclick="claimDailyBonus()">🎁 Ежедневный бонус (+10 ⭐)</button>
+                <button class="btn" style="margin-top: 8px;" onclick="withdrawStars()">💸 Вывести Stars (мин. 100)</button>
+            </div>
+        </div>
+
+        <!-- ИГРОВОЙ ЭКРАН -->
+        <div id="page-game" class="page">
+            <div class="poker-table">
+                <div class="timer-badge" id="game-timer">⏳ 15s</div>
+                <div id="opponent-info" style="color: #a7f3d0;">Соперник (Уровень ?)</div>
+                <div id="table-cards" style="margin-top: 60px; text-align: center;">Ожидание ходов...</div>
+            </div>
+            <div id="my-hand" style="margin-top: 15px; display: flex; gap: 5px; overflow-x: auto;"></div>
+        </div>
+    </div>
+
+    <!-- НИЖНЯЯ ПАНЕЛЬ -->
+    <div class="navbar">
+        <div class="nav-item active" onclick="switchPage('menu', this)">
+            <span class="nav-icon">🎮</span><span>Столы</span>
+        </div>
+        <div class="nav-item" onclick="switchPage('leaderboard', this)">
+            <span class="nav-icon">🏆</span><span>Рейтинг</span>
+        </div>
+        <div class="nav-item" onclick="switchPage('referrals', this)">
+            <span class="nav-icon">🎁</span><span>Друзья</span>
+        </div>
+        <div class="nav-item" onclick="switchPage('profile', this)">
+            <span class="nav-icon">👤</span><span>Профиль</span>
+        </div>
     </div>
 
     <script>
         const tg = window.Telegram.WebApp;
         tg.expand();
 
-        const userId = tg.initDataUnsafe?.user?.id || Math.floor(Math.random() * 1000000);
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(`${wsProtocol}//${window.location.host}`);
+        const socket = io();
+        const user = tg.initDataUnsafe?.user || { id: 12345, first_name: "Игрок" };
 
-        ws.onopen = () => {
-            document.getElementById('status').innerText = 'Статус: Подключено к серверу';
-        };
+        document.getElementById('user-name').innerText = user.first_name;
+        socket.emit('INIT_USER', { ...user, start_param: tg.initDataUnsafe?.start_param });
 
-        ws.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            if (data.type === 'GAME_START') {
-                document.getElementById('status').innerHTML = `🎮 <b>Игра началась!</b><br>Банк: ${data.bank} ⭐<br>Призовой фонд: ${data.prize} ⭐<br>Комиссия сервиса (10%): ${data.fee} ⭐`;
+        socket.on('USER_DATA', (dbUser) => {
+            if (dbUser) {
+                document.getElementById('user-level').innerText = dbUser.level || 1;
+                document.getElementById('user-balance').innerText = dbUser.stars_balance || 0;
+                document.getElementById('bonus-balance').innerText = dbUser.bonus_balance || 0;
+                
+                const total = (dbUser.wins || 0) + (dbUser.losses || 0);
+                const winrate = total > 0 ? Math.round((dbUser.wins / total) * 100) : 0;
+                document.getElementById('user-winrate').innerText = `${winrate}% (${dbUser.wins || 0} В / ${dbUser.losses || 0} П)`;
             }
-        };
+        });
 
-        function joinGame() {
-            const betAmount = parseInt(document.getElementById('betInput').value) || 10;
-            const roomId = 'room_1';
-            ws.send(JSON.stringify({
-                type: 'JOIN_GAME',
-                roomId: roomId,
-                betAmount: betAmount,
-                userId: userId
-            }));
-            document.getElementById('status').innerText = 'Ищем соперника...';
+        function switchPage(pageId, el) {
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            document.getElementById(`page-${pageId}`).classList.add('active');
+            if (el) el.classList.add('active');
+
+            if (pageId === 'menu') socket.emit('GET_ROOMS');
         }
+
+        function createFastGame() {
+            socket.emit('CREATE_ROOM', { mode: 'podkidnoy', deckSize: 36, bet: 10, user });
+        }
+
+        function claimDailyBonus() {
+            socket.emit('CLAIM_DAILY_BONUS', user.id);
+        }
+
+        socket.on('BONUS_CLAIMED', (res) => {
+            alert(res.success ? `Успешно! Вы получили +${res.amount} ⭐` : res.message);
+        });
+
+        function withdrawStars() {
+            alert('Минимальная сумма вывода — 100 ⭐');
+        }
+
+        function copyRefLink() {
+            const link = `https://t.me/YOUR_BOT_USERNAME?start=${user.id}`;
+            navigator.clipboard.writeText(link);
+            alert('Ссылка скопирована!');
+        }
+
+        socket.on('TIMER_TICK', (data) => {
+            document.getElementById('game-timer').innerText = `⏳ ${data.timeLeft}s`;
+        });
     </script>
 </body>
 </html>
