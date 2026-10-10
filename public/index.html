@@ -173,9 +173,9 @@
     <div class="header-bar">
         <div class="user-info">
             <span>🃏</span>
-            <span id="header-name">Загрузка...</span>
+            <span id="header-name">Игрок</span>
         </div>
-        <div class="balance-chip" onclick="openBalanceModal()">
+        <div class="balance-chip" onclick="window.openBalanceModal()">
             <span id="header-balance">0</span> ⭐ ➕
         </div>
     </div>
@@ -184,8 +184,8 @@
         <!-- 1. СТОЛЫ -->
         <div id="page-menu" class="page active">
             <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                <button class="btn" onclick="openCreateModal()">➕ Создать стол</button>
-                <button class="btn btn-outline" onclick="createFastGame()">⚡ Быстрый поиск</button>
+                <button class="btn" onclick="window.openCreateModal()">➕ Создать стол</button>
+                <button class="btn btn-outline" onclick="window.createFastGame()">⚡ Быстрый поиск</button>
             </div>
             
             <h3 style="margin-bottom: 10px; font-size: 16px;">📜 Активные столы</h3>
@@ -207,7 +207,7 @@
             <h3 style="margin-bottom: 10px;">🎁 Реферальная система</h3>
             <div class="card">
                 <p style="font-size: 14px; line-height: 1.5;">Приглашайте друзей и получайте <b>+10 ⭐</b> за каждого нового игрока + <b>5%</b> от всех их ставок навсегда!</p>
-                <button class="btn" onclick="copyRefLink()">📋 Скопировать ссылку</button>
+                <button class="btn" onclick="window.copyRefLink()">📋 Скопировать ссылку</button>
             </div>
         </div>
 
@@ -221,7 +221,7 @@
                 <p style="margin: 5px 0;">Основной баланс: <b id="user-balance">0</b> ⭐</p>
                 <p style="margin: 5px 0;">Победы / Поражения: <b id="user-winrate">0 В / 0 П</b></p>
                 
-                <button class="btn btn-green" onclick="claimDailyBonus()" style="margin-top: 20px;">
+                <button class="btn btn-green" onclick="window.claimDailyBonus()" style="margin-top: 20px;">
                     🎁 Ежедневный бонус (+10 ⭐)
                 </button>
             </div>
@@ -286,8 +286,8 @@
                     <option value="100">100 ⭐</option>
                 </select>
             </div>
-            <button class="btn" onclick="submitCreateRoom()">Создать стол</button>
-            <button class="btn btn-outline" onclick="closeCreateModal()" style="margin-top: 8px;">Отмена</button>
+            <button class="btn" onclick="window.submitCreateRoom()">Создать стол</button>
+            <button class="btn btn-outline" onclick="window.closeCreateModal()" style="margin-top: 8px;">Отмена</button>
         </div>
     </div>
 
@@ -298,7 +298,7 @@
             <p>Ваш баланс: <b id="modal-balance-val">0</b> ⭐</p>
             <button class="btn btn-green" onclick="alert('Пополнение Stars через Telegram будет доступно при запуске платежного шлюза.')">➕ Пополнить</button>
             <button class="btn" onclick="alert('Минимальная сумма для вывода — 100 ⭐.')" style="margin-top: 8px;">💸 Вывести</button>
-            <button class="btn btn-outline" onclick="closeBalanceModal()" style="margin-top: 8px;">Закрыть</button>
+            <button class="btn btn-outline" onclick="window.closeBalanceModal()" style="margin-top: 8px;">Закрыть</button>
         </div>
     </div>
 
@@ -319,7 +319,24 @@
     </div>
 
     <script>
-        // ГАРАНТИРОВАННАЯ ГЛОБАЛЬНАЯ ОБЛАСТЬ ВИДИМОСТИ ФУНКЦИЙ
+        // БЕЗОПАСНАЯ ИНИЦИАЛИЗАЦИЯ ПОЛЬЗОВАТЕЛЯ
+        const tg = window.Telegram?.WebApp;
+        if (tg) tg.expand();
+
+        const user = tg?.initDataUnsafe?.user || { 
+            id: Math.floor(Math.random() * 900000) + 100000, 
+            first_name: "Игрок", 
+            username: "player" 
+        };
+
+        document.getElementById('header-name').innerText = user.first_name;
+        document.getElementById('user-name').innerText = user.first_name;
+
+        const socket = io();
+
+        socket.emit('INIT_USER', { ...user, start_param: tg?.initDataUnsafe?.start_param });
+
+        // ВСЕ ФУНКЦИИ ГАРАНТИРОВАННО В window
         window.switchPage = function(pageId, el) {
             document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
             document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -368,27 +385,10 @@
         };
 
         window.copyRefLink = function() {
-            const botUsername = tg.initDataUnsafe?.bot_username || 'CardFoolBot';
+            const botUsername = tg?.initDataUnsafe?.bot_username || 'CardFoolBot';
             const link = `https://t.me/${botUsername}?start=${user.id}`;
             navigator.clipboard.writeText(link).then(() => alert(`Ссылка скопирована:\n${link}`)).catch(() => prompt('Скопируйте ссылку:', link));
         };
-
-        // Инициализация Telegram WebApp и Socket.io
-        const tg = window.Telegram?.WebApp;
-        if (tg) tg.expand();
-
-        const user = tg?.initDataUnsafe?.user || { 
-            id: Math.floor(Math.random() * 900000) + 100000, 
-            first_name: "Игрок (Тест)", 
-            username: "test_player" 
-        };
-
-        document.getElementById('header-name').innerText = user.first_name;
-        document.getElementById('user-name').innerText = user.first_name;
-
-        const socket = io();
-
-        socket.emit('INIT_USER', { ...user, start_param: tg?.initDataUnsafe?.start_param });
 
         socket.on('USER_DATA', (dbUser) => {
             if (dbUser) {
@@ -416,4 +416,4 @@
                     <div class="card ${isMyRoom ? 'my-room' : ''}">
                         <b>${isMyRoom ? '⭐ Ваш стол: ' : ''}${r.host}</b> (Ур. ${r.hostLevel}) | Ставка: <b>${r.bet} ⭐</b><br>
                         <small style="color: var(--text-muted);">Режим: ${r.mode === 'podkidnoy' ? 'Подкидной' : 'Переводной'} (${r.deckSize} карт)</small>
-                        ${isMyRoom ? '<p style="color: var(--accent-gold); font-size: 12px; margin: 5px 0 0 0;">Ожидание соперника...</p>' : `<button class="btn" style="margin-top:
+                        ${isMyRoom ? '<p style="color: var(--accent-gold); font-size: 12px; margin: 5px 0 0 0;">Ожидание соперника...</p>' : `<button class="btn" 
