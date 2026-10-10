@@ -30,7 +30,6 @@
             overflow: hidden; position: relative;
         }
 
-        /* Водяные знаки мастей */
         body::before {
             content: "♠ ♥ ♦ ♣ ♠ ♥ ♦ ♣ ♠ ♥ ♦ ♣";
             position: absolute; top: 50%; left: 50%;
@@ -80,7 +79,6 @@
         .btn-green { background: linear-gradient(135deg, #10b981 0%, #059669 100%); box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3); }
         .btn-outline { background: transparent; border: 2px solid var(--accent-purple); color: var(--accent-glow); box-shadow: none; }
 
-        /* ИГРОВОЙ СТОЛ */
         .poker-table {
             background: radial-gradient(circle at center, #1e1b4b 0%, #0f172a 100%);
             border-radius: 24px; border: 3px solid var(--accent-purple);
@@ -90,7 +88,7 @@
         }
 
         .opponent-area { display: flex; justify-content: space-between; align-items: center; }
-        .opponent-cards-row { display: flex; gap: -15px; }
+        .opponent-cards-row { display: flex; }
         .card-back {
             width: 32px; height: 48px; background: linear-gradient(135deg, #4c1d95, #1e1b4b);
             border: 1px solid var(--accent-glow); border-radius: 4px;
@@ -175,7 +173,7 @@
     <div class="header-bar">
         <div class="user-info">
             <span>🃏</span>
-            <span id="header-name">Игрок</span>
+            <span id="header-name">Загрузка...</span>
         </div>
         <div class="balance-chip" onclick="openBalanceModal()">
             <span id="header-balance">0</span> ⭐ ➕
@@ -232,7 +230,6 @@
         <!-- ИГРОВОЙ ЭКРАН -->
         <div id="page-game" class="page">
             <div class="poker-table">
-                <!-- Верх: Профиль соперника и его рубашки карт -->
                 <div class="opponent-area">
                     <div>
                         <b id="opponent-name" style="color: var(--accent-glow);">Соперник</b>
@@ -242,7 +239,6 @@
                     <div style="background: #ef4444; color: white; padding: 4px 10px; border-radius: 20px; font-weight: bold; font-size: 12px;" id="game-timer">⏳ 15s</div>
                 </div>
 
-                <!-- Центр: Колода, козырь и стол для хода -->
                 <div class="table-center">
                     <div class="deck-area">
                         <div class="trump-card-display" id="trump-card">♠ 6</div>
@@ -253,14 +249,12 @@
                     </div>
                 </div>
 
-                <!-- Нижние действия -->
                 <div style="display: flex; gap: 8px;">
                     <button class="btn btn-outline" style="padding: 8px; font-size: 13px;">Бито</button>
                     <button class="btn" style="padding: 8px; font-size: 13px; background: #ef4444;">Взять</button>
                 </div>
             </div>
 
-            <!-- Рука игрока -->
             <div class="hand-container" id="my-hand"></div>
         </div>
     </div>
@@ -310,31 +304,91 @@
 
     <!-- НИЖНЯЯ НАВИГАЦИЯ -->
     <div class="navbar">
-        <div class="nav-item active" onclick="switchPage('menu', this)">
+        <div class="nav-item active" onclick="window.switchPage('menu', this)">
             <span class="nav-icon">🎮</span><span>Столы</span>
         </div>
-        <div class="nav-item" onclick="switchPage('leaderboard', this)">
+        <div class="nav-item" onclick="window.switchPage('leaderboard', this)">
             <span class="nav-icon">🏆</span><span>Рейтинг</span>
         </div>
-        <div class="nav-item" onclick="switchPage('referrals', this)">
+        <div class="nav-item" onclick="window.switchPage('referrals', this)">
             <span class="nav-icon">🎁</span><span>Друзья</span>
         </div>
-        <div class="nav-item" onclick="switchPage('profile', this)">
+        <div class="nav-item" onclick="window.switchPage('profile', this)">
             <span class="nav-icon">👤</span><span>Профиль</span>
         </div>
     </div>
 
     <script>
-        const tg = window.Telegram.WebApp;
-        tg.expand();
+        // ГАРАНТИРОВАННАЯ ГЛОБАЛЬНАЯ ОБЛАСТЬ ВИДИМОСТИ ФУНКЦИЙ
+        window.switchPage = function(pageId, el) {
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            const page = document.getElementById(`page-${pageId}`);
+            if (page) page.classList.add('active');
+            if (el) el.classList.add('active');
 
-        const socket = io();
-        const user = tg.initDataUnsafe?.user || { id: Math.floor(Math.random()*100000), first_name: "Игрок" };
+            if (pageId === 'menu') socket.emit('GET_ROOMS');
+            if (pageId === 'leaderboard') socket.emit('GET_LEADERBOARD');
+        };
+
+        window.openCreateModal = function() {
+            document.getElementById('modal-create').style.display = 'flex';
+        };
+
+        window.closeCreateModal = function() {
+            document.getElementById('modal-create').style.display = 'none';
+        };
+
+        window.openBalanceModal = function() {
+            document.getElementById('modal-balance').style.display = 'flex';
+        };
+
+        window.closeBalanceModal = function() {
+            document.getElementById('modal-balance').style.display = 'none';
+        };
+
+        window.submitCreateRoom = function() {
+            const mode = document.getElementById('create-mode').value;
+            const deckSize = document.getElementById('create-deck').value;
+            const bet = document.getElementById('create-bet').value;
+            socket.emit('CREATE_ROOM', { mode, deckSize, bet, user });
+            window.closeCreateModal();
+        };
+
+        window.createFastGame = function() {
+            socket.emit('CREATE_ROOM', { mode: 'podkidnoy', deckSize: 36, bet: 10, user });
+        };
+
+        window.joinRoom = function(id) {
+            socket.emit('JOIN_ROOM', { roomId: id, user });
+        };
+
+        window.claimDailyBonus = function() {
+            socket.emit('CLAIM_DAILY_BONUS', user.id);
+        };
+
+        window.copyRefLink = function() {
+            const botUsername = tg.initDataUnsafe?.bot_username || 'CardFoolBot';
+            const link = `https://t.me/${botUsername}?start=${user.id}`;
+            navigator.clipboard.writeText(link).then(() => alert(`Ссылка скопирована:\n${link}`)).catch(() => prompt('Скопируйте ссылку:', link));
+        };
+
+        // Инициализация Telegram WebApp и Socket.io
+        const tg = window.Telegram?.WebApp;
+        if (tg) tg.expand();
+
+        const user = tg?.initDataUnsafe?.user || { 
+            id: Math.floor(Math.random() * 900000) + 100000, 
+            first_name: "Игрок (Тест)", 
+            username: "test_player" 
+        };
 
         document.getElementById('header-name').innerText = user.first_name;
         document.getElementById('user-name').innerText = user.first_name;
 
-        socket.emit('INIT_USER', { ...user, start_param: tg.initDataUnsafe?.start_param });
+        const socket = io();
+
+        socket.emit('INIT_USER', { ...user, start_param: tg?.initDataUnsafe?.start_param });
 
         socket.on('USER_DATA', (dbUser) => {
             if (dbUser) {
@@ -348,36 +402,9 @@
 
         socket.on('ERROR_MSG', (msg) => alert(msg));
 
-        function switchPage(pageId, el) {
-            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-            document.getElementById(`page-${pageId}`).classList.add('active');
-            if (el) el.classList.add('active');
-
-            if (pageId === 'menu') socket.emit('GET_ROOMS');
-            if (pageId === 'leaderboard') socket.emit('GET_LEADERBOARD');
-        }
-
-        function openCreateModal() { document.getElementById('modal-create').style.display = 'flex'; }
-        function closeCreateModal() { document.getElementById('modal-create').style.display = 'none'; }
-        function openBalanceModal() { document.getElementById('modal-balance').style.display = 'flex'; }
-        function closeBalanceModal() { document.getElementById('modal-balance').style.display = 'none'; }
-
-        function submitCreateRoom() {
-            const mode = document.getElementById('create-mode').value;
-            const deckSize = document.getElementById('create-deck').value;
-            const bet = document.getElementById('create-bet').value;
-            socket.emit('CREATE_ROOM', { mode, deckSize, bet, user });
-            closeCreateModal();
-        }
-
-        function createFastGame() {
-            socket.emit('CREATE_ROOM', { mode: 'podkidnoy', deckSize: 36, bet: 10, user });
-        }
-
         socket.on('ROOMS_LIST', (rooms) => {
             const list = document.getElementById('rooms-list');
-            if (rooms.length === 0) {
+            if (!rooms || rooms.length === 0) {
                 list.innerHTML = '<div class="card"><p style="color: var(--text-muted); text-align: center;">Открытых столов нет. Создайте свой!</p></div>';
                 return;
             }
@@ -389,21 +416,4 @@
                     <div class="card ${isMyRoom ? 'my-room' : ''}">
                         <b>${isMyRoom ? '⭐ Ваш стол: ' : ''}${r.host}</b> (Ур. ${r.hostLevel}) | Ставка: <b>${r.bet} ⭐</b><br>
                         <small style="color: var(--text-muted);">Режим: ${r.mode === 'podkidnoy' ? 'Подкидной' : 'Переводной'} (${r.deckSize} карт)</small>
-                        ${isMyRoom ? '<p style="color: var(--accent-gold); font-size: 12px; margin: 5px 0 0 0;">Ожидание соперника...</p>' : `<button class="btn" style="margin-top: 10px;" onclick="joinRoom('${r.id}')">Присоединиться</button>`}
-                    </div>
-                `;
-            }).join('');
-        });
-
-        function joinRoom(id) { socket.emit('JOIN_ROOM', { roomId: id, user }); }
-
-        // ЗАПУСК ИГРЫ ДЛЯ ОБОИХ ИГРОКОВ
-        socket.on('GAME_STARTED', (data) => {
-            switchPage('game');
-            const opp = data.players.find(p => p.id !== user.id);
-            document.getElementById('opponent-name').innerText = opp ? opp.name : 'Соперник';
-            document.getElementById('opponent-cards-count').innerText = `${opp ? opp.cardCount : 6} карт`;
-            
-            // Рубашки карт соперника
-            const backsDiv = document.getElementById('opponent-hand-backs');
-            backsDiv.in
+                        ${isMyRoom ? '<p style="color: var(--accent-gold); font-size: 12px; margin: 5px 0 0 0;">Ожидание соперника...</p>' : `<button class="btn" style="margin-top:
