@@ -16,8 +16,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
 const rooms = {};
-const memoryUsers = {}; // Временное хранилище в памяти, если БД еще не подключена
-const ADMIN_IDS = [123456789]; // Замените на ваш Telegram ID
+const memoryUsers = {};
+const ADMIN_IDS = [123456789]; // Укажите ваш Telegram ID
 
 async function getUser(telegramId) {
     if (supabase) {
@@ -56,7 +56,6 @@ io.on('connection', (socket) => {
         socket.join(`user_${userData.id}`);
 
         let user = await getUser(userData.id);
-        const now = new Date();
 
         if (!user) {
             const referrerId = userData.start_param ? parseInt(userData.start_param) : null;
@@ -113,7 +112,6 @@ io.on('connection', (socket) => {
         socket.emit('ROOMS_LIST', publicRooms);
     });
 
-    // Создание стола с проверкой баланса
     socket.on('CREATE_ROOM', async ({ mode, deckSize, bet, user }) => {
         let dbUser = await getUser(user.id);
         const currentBalance = dbUser ? dbUser.stars_balance : 0;
@@ -141,14 +139,14 @@ io.on('connection', (socket) => {
             deck: [],
             trumpCard: null,
             table: [],
-            currentTurn: 0
+            currentTurn: 0,
+            turnTimer: null
         };
         socket.join(roomId);
         socket.emit('ROOM_CREATED', roomId);
         io.emit('ROOMS_UPDATED');
     });
 
-    // Присоединение к столу и списание ставок
     socket.on('JOIN_ROOM', async ({ roomId, user }) => {
         const room = rooms[roomId];
         if (!room || room.state !== 'WAITING' || room.players.length !== 1) {
@@ -156,7 +154,7 @@ io.on('connection', (socket) => {
             return;
         }
         if (room.players[0].id === user.id) {
-            socket.emit('ERROR_MSG', 'Вы не можете присоединиться к своему собственному столу!');
+            socket.emit('ERROR_MSG', 'Вы не можете присоединиться к своему столу!');
             return;
         }
 
@@ -172,17 +170,16 @@ io.on('connection', (socket) => {
         await updateUserBalance(room.players[0].id, hostUser.stars_balance - room.bet);
         await updateUserBalance(user.id, dbUser.stars_balance - room.bet);
 
-        // Обновляем балансы в клиентах
         io.to(`user_${room.players[0].id}`).emit('USER_DATA', await getUser(room.players[0].id));
         io.to(`user_${user.id}`).emit('USER_DATA', await getUser(user.id));
 
         room.players.push({ id: user.id, name: user.first_name, level: user.level || 1, socketId: socket.id, hand: [] });
         socket.join(roomId);
+        
         startGame(room);
         io.emit('ROOMS_UPDATED');
     });
 
-    // Ежедневный бонус
     socket.on('CLAIM_DAILY_BONUS', async (userId) => {
         let user = await getUser(userId);
         if (!user) return;
@@ -215,27 +212,48 @@ io.on('connection', (socket) => {
 function startGame(room) {
     room.state = 'PLAYING';
     room.deck = createDeck(room.deckSize);
+    
+    // Раздача по 6 карт
     room.players[0].hand = room.deck.splice(0, 6);
     room.players[1].hand = room.deck.splice(0, 6);
-    room.trumpCard = room.deck[room.deck.length - 1];
+    room.trumpCard = room.deck[room.deck.length - 1]; // Козырь под колодой
     
     const totalBank = room.bet * 2;
     room.winPrize = totalBank - Math.floor(totalBank * 0.10); // 10% комиссия
 
+    // Отправляем событие НАЧАЛА ИГРЫ ОБОИМ игрокам в комнате
     io.to(room.id).emit('GAME_STARTED', {
         roomId: room.id,
         mode: room.mode,
         players: room.players.map(p => ({ id: p.id, name: p.name, level: p.level, cardCount: p.hand.length })),
         trumpCard: room.trumpCard,
         deckLeft: room.deck.length,
-        winPrize: room.winPrize
+        winPrize: room.winPrize,
+        attackerId: room.players[0].id
     });
 
+    // Отправляем каждому игроку его уникальную руку
     room.players.forEach(p => {
         io.to(p.socketId).emit('YOUR_HAND', p.hand);
     });
+
+    startTurnTimer(room);
+}
+
+function startTurnTimer(room) {
+    if (room.turnTimer) clearInterval(room.turnTimer);
+    let timeLeft = 15;
+
+    room.turnTimer = setInterval(() => {
+        io.to(room.id).emit('TIMER_TICK', { timeLeft });
+        timeLeft--;
+
+        if (timeLeft < 0) {
+            clearInterval(room.turnTimer);
+            io.to(room.id).emit('TIMEOUT_ACTION', { currentTurn: room.currentTurn });
+        }
+    }, 1000);
 }
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-                
