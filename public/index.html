@@ -3,14 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>CardFool — Дурак на Звёзды</title>
+    <title>CardFool — Онлайн Дурак</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="/socket.io/socket.io.js"></script>
     <style>
         :root {
-            --bg-color: #0f172a;
-            --card-bg: #1e293b;
+            --bg-color: #0b1329;
+            --card-bg: #162238;
             --accent-color: #38bdf8;
+            --accent-gold: #f59e0b;
             --text-color: #f8fafc;
             --text-muted: #94a3b8;
         }
@@ -24,23 +25,53 @@
             overflow: hidden;
         }
 
-        .content { flex: 1; overflow-y: auto; padding: 16px; padding-bottom: 70px; }
+        /* Верхняя шапка с балансом */
+        .header-bar {
+            background: #10192d;
+            padding: 12px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #1e2d4a;
+        }
+        .user-info { display: flex; align-items: center; gap: 8px; font-weight: bold; }
+        .balance-chip {
+            background: rgba(245, 158, 11, 0.15);
+            border: 1px solid var(--accent-gold);
+            color: var(--accent-gold);
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 14px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        /* Основной контент */
+        .content { flex: 1; overflow-y: auto; padding: 16px; padding-bottom: 80px; }
         .page { display: none; }
         .page.active { display: block; }
 
-        .card { background: var(--card-bg); border-radius: 16px; padding: 16px; margin-bottom: 12px; }
+        .card { background: var(--card-bg); border-radius: 16px; padding: 16px; margin-bottom: 12px; border: 1px solid #1e2d4a; }
+        
+        /* Кнопки */
         .btn {
             background: var(--accent-color); color: #0f172a; font-weight: bold;
-            border: none; border-radius: 12px; padding: 12px 16px; width: 100%;
-            font-size: 16px; cursor: pointer; margin-top: 8px;
+            border: none; border-radius: 12px; padding: 14px; width: 100%;
+            font-size: 15px; cursor: pointer; margin-top: 8px;
+            display: flex; justify-content: center; align-items: center; gap: 6px;
         }
         .btn-green { background: #22c55e; color: white; }
+        .btn-outline { background: transparent; border: 2px solid var(--accent-color); color: var(--accent-color); }
         .btn:active { opacity: 0.8; }
 
+        /* Нижнее меню */
         .navbar {
             position: fixed; bottom: 0; left: 0; right: 0;
-            background: #1e293b; display: flex; justify-content: space-around;
-            padding: 10px 0; border-top: 1px solid #334155;
+            background: #10192d; display: flex; justify-content: space-around;
+            padding: 10px 0; border-top: 1px solid #1e2d4a;
         }
         .nav-item {
             color: var(--text-muted); text-decoration: none; font-size: 11px;
@@ -49,73 +80,153 @@
         .nav-item.active { color: var(--accent-color); font-weight: bold; }
         .nav-icon { font-size: 20px; }
 
-        .poker-table {
-            background: #064e3b; border-radius: 20px; border: 4px solid #059669;
-            height: 320px; position: relative; padding: 10px; margin-top: 10px;
+        /* Всплывающее окно (Модалка создания стола) */
+        .modal {
+            display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.8); z-index: 100;
+            justify-content: center; align-items: center; padding: 20px;
         }
-        .timer-badge {
-            position: absolute; top: 10px; right: 10px; background: #ef4444;
-            color: white; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: bold;
+        .modal-content {
+            background: var(--card-bg); width: 100%; max-width: 360px;
+            border-radius: 20px; padding: 20px; border: 1px solid #2a3c5d;
         }
+        .select-group { margin-bottom: 12px; text-align: left; }
+        .select-group label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+        .select-group select {
+            width: 100%; padding: 10px; background: #0f172a; color: white;
+            border: 1px solid #2a3c5d; border-radius: 8px; font-size: 14px;
+        }
+
+        /* Таблица лидеров */
+        .leader-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 10px 0; border-bottom: 1px solid #1e2d4a;
+        }
+        .leader-item:last-child { border-bottom: none; }
     </style>
 </head>
 <body>
 
+    <!-- ВЕРХНЯЯ ШАПКА -->
+    <div class="header-bar">
+        <div class="user-info">
+            <span id="header-avatar">👤</span>
+            <span id="header-name">Загрузка...</span>
+        </div>
+        <div class="balance-chip" onclick="openBalanceModal()">
+            <span id="header-balance">0</span> ⭐ ➕
+        </div>
+    </div>
+
+    <!-- КОНТЕНТ СТРАНИЦ -->
     <div class="content">
-        <!-- 1. МЕНЮ / ЛОББИ -->
+        
+        <!-- 1. ИГРОВЫЕ СТОЛЫ -->
         <div id="page-menu" class="page active">
-            <h2>🃏 Игровые столы</h2>
-            <button class="btn" onclick="createFastGame()">⚡ Быстрая игра (10 ⭐)</button>
-            <div id="rooms-list" style="margin-top: 15px;">
-                <div class="card"><p style="color: var(--text-muted);">Поиск открытых столов...</p></div>
+            <div style="display: flex; gap: 10px; margin-bottom: 12px;">
+                <button class="btn" onclick="openCreateModal()">➕ Создать стол</button>
+                <button class="btn btn-outline" onclick="createFastGame()">⚡ Быстрый поиск</button>
+            </div>
+            
+            <h3 style="margin-top: 15px;">📜 Открытые столы</h3>
+            <div id="rooms-list">
+                <div class="card"><p style="color: var(--text-muted); text-align: center;">Поиск доступных столов...</p></div>
             </div>
         </div>
 
-        <!-- 2. ЛИДЕРБОРД -->
+        <!-- 2. РЕЙТИНГ (ЛИДЕРБОРД) -->
         <div id="page-leaderboard" class="page">
-            <h2>🏆 Топ игроков</h2>
-            <div class="card">
-                <p>1. 👑 @alex — 142 победы</p>
-                <p>2. 🥈 @dmitry — 98 побед</p>
-                <p>3. 🥉 @pavel — 85 побед</p>
+            <h3>🏆 Топ-50 Игроков</h3>
+            <div class="card" id="leaderboard-list">
+                <p style="text-align: center; color: var(--text-muted);">Загрузка лидеров...</p>
             </div>
         </div>
 
         <!-- 3. РЕФЕРАЛЫ -->
         <div id="page-referrals" class="page">
-            <h2>🎁 Рефералы</h2>
+            <h3>🎁 Приглашай друзей</h3>
             <div class="card">
-                <p>Приглашай друзей и получай <b>+10 ⭐</b> за каждого + <b>5%</b> от их трат навсегда!</p>
-                <button class="btn" onclick="copyRefLink()">📋 Скопировать ссылку</button>
+                <p>Получай <b>+10 ⭐</b> за каждого приглашенного друга + <b>5%</b> от всех его ставок навсегда!</p>
+                <button class="btn" onclick="copyRefLink()">📋 Скопировать реферальную ссылку</button>
             </div>
         </div>
 
         <!-- 4. ПРОФИЛЬ -->
         <div id="page-profile" class="page">
-            <h2>👤 Профиль</h2>
+            <h3>👤 Мой профиль</h3>
             <div class="card" style="text-align: center;">
-                <h3 id="user-name">Загрузка...</h3>
+                <h2 id="user-name" style="margin: 5px 0;">Игрок</h2>
                 <p>Уровень: <b id="user-level" style="color: var(--accent-color);">1</b></p>
+                <hr style="border-color: #1e2d4a; margin: 15px 0;">
                 <p>Основной баланс: <b id="user-balance">0</b> ⭐</p>
-                <p>Бонусы (отыгрыш): <b id="bonus-balance" style="color: #f59e0b;">10</b> ⭐</p>
-                <p>Винрейт: <b id="user-winrate">0%</b></p>
-                <button class="btn btn-green" onclick="claimDailyBonus()">🎁 Ежедневный бонус (+10 ⭐)</button>
-                <button class="btn" style="margin-top: 8px;" onclick="withdrawStars()">💸 Вывести Stars (мин. 100)</button>
+                <p>Бонусные звезды: <b id="bonus-balance" style="color: var(--accent-gold);">10</b> ⭐</p>
+                <p>Победы / Поражения: <b id="user-winrate">0 В / 0 П</b></p>
+                
+                <button class="btn btn-green" onclick="claimDailyBonus()" style="margin-top: 15px;">
+                    🎁 Ежедневный бонус (+10 ⭐)
+                </button>
             </div>
         </div>
 
-        <!-- ИГРОВОЙ ЭКРАН -->
+        <!-- ИГРОВОЙ ЭКРАН (Скрыт по умолчанию) -->
         <div id="page-game" class="page">
-            <div class="poker-table">
-                <div class="timer-badge" id="game-timer">⏳ 15s</div>
+            <div style="background: #064e3b; border-radius: 20px; border: 4px solid #059669; height: 320px; position: relative; padding: 10px;">
+                <div style="position: absolute; top: 10px; right: 10px; background: #ef4444; color: white; padding: 4px 10px; border-radius: 20px; font-weight: bold; font-size: 12px;" id="game-timer">⏳ 15s</div>
                 <div id="opponent-info" style="color: #a7f3d0;">Соперник (Уровень ?)</div>
-                <div id="table-cards" style="margin-top: 60px; text-align: center;">Ожидание ходов...</div>
+                <div id="table-cards" style="margin-top: 60px; text-align: center;">Идет раздача карт...</div>
             </div>
             <div id="my-hand" style="margin-top: 15px; display: flex; gap: 5px; overflow-x: auto;"></div>
         </div>
     </div>
 
-    <!-- НИЖНЯЯ ПАНЕЛЬ -->
+    <!-- ВСПЛЫВАЮЩЕЕ ОКНО СОЗДАНИЯ СТОЛА -->
+    <div class="modal" id="modal-create">
+        <div class="modal-content">
+            <h3>⚙️ Настройки стола</h3>
+            
+            <div class="select-group">
+                <label>Режим игры:</label>
+                <select id="create-mode">
+                    <option value="podkidnoy">Подкидной</option>
+                    <option value="perevodnoy">Переводной</option>
+                </select>
+            </div>
+
+            <div class="select-group">
+                <label>Колода:</label>
+                <select id="create-deck">
+                    <option value="36">36 карт</option>
+                    <option value="24">24 карты</option>
+                </select>
+            </div>
+
+            <div class="select-group">
+                <label>Ставка (Звёзды):</label>
+                <select id="create-bet">
+                    <option value="10">10 ⭐</option>
+                    <option value="25">25 ⭐</option>
+                    <option value="50">50 ⭐</option>
+                    <option value="100">100 ⭐</option>
+                </select>
+            </div>
+
+            <button class="btn" onclick="submitCreateRoom()">Создать стол</button>
+            <button class="btn btn-outline" onclick="closeCreateModal()" style="margin-top: 5px;">Отмена</button>
+        </div>
+    </div>
+
+    <!-- ВСПЛЫВАЮЩЕЕ ОКНО БАЛАНСА -->
+    <div class="modal" id="modal-balance">
+        <div class="modal-content" style="text-align: center;">
+            <h3>💳 Управление балансом</h3>
+            <p>Текущий баланс: <b id="modal-balance-val">0</b> ⭐</p>
+            <button class="btn btn-green" onclick="alert('Пополнение через Telegram Stars будет доступно после привязки платежного бота.')">➕ Пополнить Stars</button>
+            <button class="btn" onclick="alert('Минимальная сумма для вывода — 100 ⭐.')" style="margin-top: 8px;">💸 Вывести Stars</button>
+            <button class="btn btn-outline" onclick="closeBalanceModal()" style="margin-top: 8px;">Закрыть</button>
+        </div>
+    </div>
+
+    <!-- НИЖНЯЯ НАВИГАЦИЯ -->
     <div class="navbar">
         <div class="nav-item active" onclick="switchPage('menu', this)">
             <span class="nav-icon">🎮</span><span>Столы</span>
@@ -138,18 +249,23 @@
         const socket = io();
         const user = tg.initDataUnsafe?.user || { id: 12345, first_name: "Игрок" };
 
+        // Установка имени в шапку и профиль
+        document.getElementById('header-name').innerText = user.first_name;
         document.getElementById('user-name').innerText = user.first_name;
+
         socket.emit('INIT_USER', { ...user, start_param: tg.initDataUnsafe?.start_param });
 
+        // Обновление данных пользователя с сервера
         socket.on('USER_DATA', (dbUser) => {
             if (dbUser) {
+                const totalBalance = (dbUser.stars_balance || 0) + (dbUser.bonus_balance || 0);
+                document.getElementById('header-balance').innerText = totalBalance;
+                document.getElementById('modal-balance-val').innerText = totalBalance;
+                
                 document.getElementById('user-level').innerText = dbUser.level || 1;
                 document.getElementById('user-balance').innerText = dbUser.stars_balance || 0;
                 document.getElementById('bonus-balance').innerText = dbUser.bonus_balance || 0;
-                
-                const total = (dbUser.wins || 0) + (dbUser.losses || 0);
-                const winrate = total > 0 ? Math.round((dbUser.wins / total) * 100) : 0;
-                document.getElementById('user-winrate').innerText = `${winrate}% (${dbUser.wins || 0} В / ${dbUser.losses || 0} П)`;
+                document.getElementById('user-winrate').innerText = `${dbUser.wins || 0} В / ${dbUser.losses || 0} П`;
             }
         });
 
@@ -160,28 +276,93 @@
             if (el) el.classList.add('active');
 
             if (pageId === 'menu') socket.emit('GET_ROOMS');
+            if (pageId === 'leaderboard') socket.emit('GET_LEADERBOARD');
+        }
+
+        /* --- МОДАЛЬНЫЕ ОКНА --- */
+        function openCreateModal() { document.getElementById('modal-create').style.display = 'flex'; }
+        function closeCreateModal() { document.getElementById('modal-create').style.display = 'none'; }
+        function openBalanceModal() { document.getElementById('modal-balance').style.display = 'flex'; }
+        function closeBalanceModal() { document.getElementById('modal-balance').style.display = 'none'; }
+
+        function submitCreateRoom() {
+            const mode = document.getElementById('create-mode').value;
+            const deckSize = document.getElementById('create-deck').value;
+            const bet = document.getElementById('create-bet').value;
+
+            socket.emit('CREATE_ROOM', { mode, deckSize, bet, user });
+            closeCreateModal();
         }
 
         function createFastGame() {
             socket.emit('CREATE_ROOM', { mode: 'podkidnoy', deckSize: 36, bet: 10, user });
         }
 
+        /* --- СПИСОК СТОЛОВ --- */
+        socket.on('ROOMS_LIST', (rooms) => {
+            const list = document.getElementById('rooms-list');
+            if (rooms.length === 0) {
+                list.innerHTML = '<div class="card"><p style="color: var(--text-muted); text-align: center;">Открытых столов нет. Создайте свой!</p></div>';
+                return;
+            }
+            list.innerHTML = rooms.map(r => `
+                <div class="card">
+                    <b>${r.host}</b> (Ур. ${r.hostLevel}) | Ставка: <b>${r.bet} ⭐</b><br>
+                    <small style="color: var(--text-muted);">Режим: ${r.mode === 'podkidnoy' ? 'Подкидной' : 'Переводной'} (${r.deckSize} карт)</small>
+                    <button class="btn" style="margin-top: 10px;" onclick="joinRoom('${r.id}')">Присоединиться</button>
+                </div>
+            `).join('');
+        });
+
+        function joinRoom(id) {
+            socket.emit('JOIN_ROOM', { roomId: id, user });
+        }
+
+        /* --- ЛИДЕРБОРД --- */
+        socket.on('LEADERBOARD_DATA', (leaders) => {
+            const list = document.getElementById('leaderboard-list');
+            if (!leaders || leaders.length === 0) {
+                list.innerHTML = '<p style="text-align: center; color: var(--text-muted);">Список лидеров пуст</p>';
+                return;
+            }
+            
+            list.innerHTML = leaders.map((l, index) => {
+                let medal = `${index + 1}.`;
+                if (index === 0) medal = '🥇';
+                if (index === 1) medal = '🥈';
+                if (index === 2) medal = '🥉';
+                return `
+                    <div class="leader-item">
+                        <div><b>${medal} ${l.first_name || l.username || 'Игрок'}</b> (Ур. ${l.level || 1})</div>
+                        <div style="color: var(--accent-color); font-weight: bold;">${l.wins || 0} побед</div>
+                    </div>
+                `;
+            }).join('');
+        });
+
+        /* --- ЕЖЕДНЕВНЫЙ БОНУС --- */
         function claimDailyBonus() {
             socket.emit('CLAIM_DAILY_BONUS', user.id);
         }
 
         socket.on('BONUS_CLAIMED', (res) => {
-            alert(res.success ? `Успешно! Вы получили +${res.amount} ⭐` : res.message);
+            alert(res.message || (res.success ? `Успешно! Вы получили +${res.amount} ⭐` : ' Ошибка'));
+            if (res.success && res.newBonusBalance !== undefined) {
+                document.getElementById('bonus-balance').innerText = res.newBonusBalance;
+            }
         });
 
-        function withdrawStars() {
-            alert('Минимальная сумма вывода — 100 ⭐');
-        }
-
+        /* --- РЕФЕРАЛЬНАЯ ССЫЛКА --- */
         function copyRefLink() {
-            const link = `https://t.me/YOUR_BOT_USERNAME?start=${user.id}`;
-            navigator.clipboard.writeText(link);
-            alert('Ссылка скопирована!');
+            // Берем логин бота автоматически если доступен, либо указываем ваш юзернейм
+            const botUsername = tg.initDataUnsafe?.bot_username || 'CardFoolBot'; 
+            const link = `https://t.me/${botUsername}?start=${user.id}`;
+            
+            navigator.clipboard.writeText(link).then(() => {
+                alert(`Ссылка скопирована!\n\n${link}`);
+            }).catch(() => {
+                prompt('Скопируйте вашу ссылку:', link);
+            });
         }
 
         socket.on('TIMER_TICK', (data) => {
@@ -189,4 +370,5 @@
         });
     </script>
 </body>
-</html>
+                                  </html>
+                                  
